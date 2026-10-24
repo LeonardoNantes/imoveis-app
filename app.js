@@ -297,6 +297,7 @@ function renderVitrine() {
 function caracteristicas(m) {
   const c = [];
   if (m.quartos != null) c.push(["🛏", plural(m.quartos, "quarto", "quartos")]);
+  if (m.suites) c.push(["🛁", plural(m.suites, "suíte", "suítes")]);
   if (m.banheiros != null) c.push(["🚿", plural(m.banheiros, "banheiro", "banheiros")]);
   if (m.capacidade) c.push(["👥", `até ${m.capacidade}`]);
   if (m.vagas) c.push(["🚗", plural(m.vagas, "vaga", "vagas")]);
@@ -339,7 +340,7 @@ function cardHtml(m, comDatas) {
     <div class="card-info">
       <h3>${esc(m.titulo)}</h3>
       ${local ? `<div class="card-local">${esc(local)}</div>` : ""}
-      <div class="card-carac">${caracteristicas(m).slice(0, 4).map(([i, t]) => `<span>${i} ${esc(t)}</span>`).join("")}</div>
+      <div class="card-carac">${caracteristicas(m).slice(0, 5).map(([i, t]) => `<span>${i} ${esc(t)}</span>`).join("")}</div>
       <div class="card-preco">${precoCard(m, comDatas)}</div>
     </div>
   </article>`;
