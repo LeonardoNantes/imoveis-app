@@ -171,15 +171,25 @@ function aplicarMarca() {
   $("#topo-nome").textContent = im.nome;
 
   const hero = $("#hero");
-  if (im.capa_modo === "banner" && im.capa_url) {
-    // Banner pronto (já tem logo/nome na arte): mostra a imagem inteira, sem texto por cima
+  const capaPc = im.capa_url, capaCel = im.capa_mobile_url || im.capa_url;
+  if (im.capa_modo === "banner" && capaPc) {
+    // Banner pronto (já tem logo/nome na arte): imagem inteira, sem texto por cima.
+    // No celular usa a "capa para celular" quando existir.
     hero.classList.add("hero-banner");
-    hero.innerHTML = `<img src="${esc(im.capa_url)}" alt="${esc(im.nome)}">`;
+    hero.innerHTML = `<picture>
+      ${im.capa_mobile_url ? `<source media="(max-width: 700px)" srcset="${esc(im.capa_mobile_url)}">` : ""}
+      <img src="${esc(capaPc)}" alt="${esc(im.nome)}">
+    </picture>`;
+    if (im.capa_mobile_url) hero.classList.add("tem-celular");
     if (E.corretor) {
       hero.insertAdjacentHTML("afterend", `<div class="faixa-corretor">👤 Atendimento: <b>${esc(E.corretor.nome)}</b></div>`);
     }
   } else {
-    if (im.capa_url) hero.style.backgroundImage = `url('${im.capa_url}')`;
+    if (capaPc) {
+      const mq = matchMedia("(max-width: 700px)");
+      const usar = () => { hero.style.backgroundImage = `url('${mq.matches ? capaCel : capaPc}')`; };
+      usar(); mq.addEventListener?.("change", usar);
+    }
     $("#hero-titulo").textContent = im.slogan || im.nome;
     $("#hero-sub").textContent = im.slogan ? im.nome : "Encontre o imóvel ideal para você";
     if (E.corretor) {
