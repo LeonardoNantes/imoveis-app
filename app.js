@@ -85,13 +85,19 @@ async function iniciar() {
     if (slugCorretor) {
       const { data } = await sb.rpc("loc_corretor_publico", { p_slug: slugCorretor });
       const c = data?.[0];
-      if (c) { E.corretor = { nome: c.nome, whatsapp: c.whatsapp }; slugImob = c.imobiliaria_slug; }
+      if (c) { E.corretor = { nome: c.nome, whatsapp: c.whatsapp, foto: c.foto_url }; slugImob = c.imobiliaria_slug; }
     }
     if (!slugImob) return erro();
 
     const { data: imob } = await sb.from("loc_imobiliarias").select("*").eq("slug", slugImob).eq("ativo", true).maybeSingle();
     if (!imob) return erro();
     E.imob = imob;
+    E.fav = lerFavoritos();
+    if (E.corretor) E.pessoa = { nome: E.corretor.nome, foto: E.corretor.foto, papel: "Seu corretor" };
+    else {
+      const { data: resp } = await sb.rpc("loc_responsavel_publico", { p_imob_slug: imob.slug });
+      if (resp?.[0]) E.pessoa = { nome: resp[0].nome, foto: resp[0].foto_url, papel: "Corretor responsável" };
+    }
     aplicarMarca();
 
     const [{ data: imoveis, error }, ocupadas] = await Promise.all([
@@ -114,6 +120,7 @@ async function iniciar() {
     $("#app").classList.remove("hidden");
     renderAbas();
     renderVitrine();
+    renderExtras();
 
     const mId = PARAMS.get("m");
     if (mId) { const m = E.imoveis.find((x) => x.id === mId); if (m) abrirDetalhe(m, true); }
@@ -202,7 +209,150 @@ function aplicarMarca() {
   const wpp = linkWpp(`Olá! Vim pelo site da ${im.nome} e gostaria de mais informações.`);
   if (wpp) { const a = $("#topo-wpp"); a.href = wpp; a.classList.remove("hidden"); }
 
-  $("#rodape").innerHTML = `<b>${esc(im.nome)}</b>${E.corretor ? `<br>Atendimento: ${esc(E.corretor.nome)}` : ""}`;
+  $("#rodape").innerHTML = `
+    ${redesHtml(im)}
+    <b>${esc(im.nome)}</b>
+    ${im.creci ? `<div>${esc(im.creci)}</div>` : ""}
+    ${E.corretor ? `<div>Atendimento: ${esc(E.corretor.nome)}</div>` : ""}`;
+  renderPessoaHero();
+}
+
+/* ---------------- corretor na capa (foto "subindo") ---------------- */
+function renderPessoaHero() {
+  const p = E.pessoa;
+  if (!p?.foto) return;   // sem foto: fica só o selo "Atendimento: Fulano"
+  const hero = $("#hero");
+  hero.classList.add("com-pessoa");
+  $("#hero-corretor")?.classList.add("hidden");
+  document.querySelector(".faixa-corretor")?.remove();
+  hero.insertAdjacentHTML("beforeend", `
+    <button class="hero-pessoa" id="hero-pessoa" aria-label="Falar com ${esc(p.nome)} no WhatsApp">
+      <img src="${esc(p.foto)}" alt="${esc(p.nome)}">
+      <span class="hero-pessoa-nome"><b>${esc(p.nome)}</b><small>${esc(p.papel)}</small></span>
+    </button>`);
+  $("#hero-pessoa").onclick = () => {
+    const url = linkWpp(`Olá, ${p.nome.split(" ")[0]}! Vim pelo site da ${E.imob.nome} e gostaria de ajuda para encontrar um imóvel.`);
+    if (url) window.open(url, "_blank", "noopener");
+  };
+}
+
+/* ---------------- redes sociais ---------------- */
+function linkRede(tipo, v) {
+  if (!v) return null;
+  v = String(v).trim();
+  if (/^https?:\/\//i.test(v)) return v;
+  const u = v.replace(/^@/, "");
+  return {
+    instagram: `https://instagram.com/${u}`,
+    facebook: `https://facebook.com/${u}`,
+    youtube: `https://youtube.com/@${u}`,
+    tiktok: `https://www.tiktok.com/@${u}`,
+  }[tipo];
+}
+const ICONES = {
+  instagram: '<path fill="currentColor" d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 8.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4ZM17.3 5.5a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4ZM12 2c-2.7 0-3 0-4.1.1C4.3 2.2 2.2 4.3 2.1 7.9 2 9 2 9.3 2 12s0 3 .1 4.1c.1 3.6 2.2 5.7 5.8 5.8 1.1.1 1.4.1 4.1.1s3 0 4.1-.1c3.6-.1 5.7-2.2 5.8-5.8.1-1.1.1-1.4.1-4.1s0-3-.1-4.1c-.1-3.6-2.2-5.7-5.8-5.8C15 2 14.7 2 12 2Zm0 1.8c2.7 0 3 0 4 .1 2.6.1 3.9 1.4 4 4 .1 1 .1 1.3.1 4s0 3-.1 4c-.1 2.6-1.4 3.9-4 4-1 .1-1.3.1-4 .1s-3 0-4-.1c-2.6-.1-3.9-1.4-4-4-.1-1-.1-1.3-.1-4s0-3 .1-4c.1-2.6 1.4-3.9 4-4 1-.1 1.3-.1 4-.1Z"/>',
+  facebook: '<path fill="currentColor" d="M14 8V6.2c0-.8.2-1.2 1.4-1.2H17V2h-2.7C11.4 2 10.5 3.4 10.5 5.9V8H8v3h2.5v11H14V11h2.6l.4-3Z"/>',
+  youtube: '<path fill="currentColor" d="M23 7.2a3 3 0 0 0-2.1-2.1C19 4.6 12 4.6 12 4.6s-7 0-8.9.5A3 3 0 0 0 1 7.2 31 31 0 0 0 .5 12 31 31 0 0 0 1 16.8a3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1 31 31 0 0 0 .5-4.8 31 31 0 0 0-.5-4.8ZM9.7 15V9l5.8 3-5.8 3Z"/>',
+  tiktok: '<path fill="currentColor" d="M16.6 2h-3.4v13.4a2.9 2.9 0 1 1-2.1-2.8V9.1a6.3 6.3 0 1 0 5.5 6.3V8.6a8 8 0 0 0 4.4 1.3V6.5a4.4 4.4 0 0 1-4.4-4.5Z"/>',
+};
+function redesHtml(im) {
+  const itens = ["instagram", "facebook", "youtube", "tiktok"].map((t) => [t, linkRede(t, im[t])]).filter(([, u]) => u);
+  if (!itens.length) return "";
+  return `<div class="redes">${itens.map(([t, u]) =>
+    `<a href="${esc(u)}" target="_blank" rel="noopener" aria-label="${t}"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">${ICONES[t]}</svg></a>`).join("")}</div>`;
+}
+
+/* ---------------- WhatsApp flutuante + "Anuncie seu imóvel" ---------------- */
+function renderExtras() {
+  const n = numeroDestino();
+  if (n) {
+    document.body.insertAdjacentHTML("beforeend", `
+      <a class="wpp-flutuante" id="wpp-flutuante" target="_blank" rel="noopener" aria-label="Falar no WhatsApp"
+         href="${esc(linkWpp(`Olá! Vim pelo site da ${E.imob.nome} e gostaria de mais informações.`))}">
+        <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.2-.4.7-1.3a.4.4 0 0 0 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.3.8 3.2.6a2.7 2.7 0 0 0 1.8-1.2 2.2 2.2 0 0 0 .1-1.3c0-.1-.2-.2-.4-.3Z"/></svg>
+      </a>`);
+    $("main.vitrine").insertAdjacentHTML("beforeend", `
+      <section class="anuncie">
+        <div>
+          <h2>É proprietário?</h2>
+          <p>Anuncie seu imóvel com a ${esc(E.imob.nome)}. Cuidamos da divulgação e do atendimento aos interessados.</p>
+        </div>
+        <a class="btn btn-destaque" target="_blank" rel="noopener"
+           href="${esc(linkWpp(`Olá! Sou proprietário e gostaria de anunciar meu imóvel com a ${E.imob.nome}.`))}">Quero anunciar meu imóvel</a>
+      </section>`);
+  }
+  renderBarraFav();
+}
+
+/* ---------------- favoritos ---------------- */
+const chaveFav = () => `fav_${E.imob.id}`;
+function lerFavoritos() {
+  try { return new Set(JSON.parse(localStorage.getItem(`fav_${E.imob?.id}`) || "[]")); } catch (_) { return new Set(); }
+}
+function salvarFavoritos() {
+  try { localStorage.setItem(chaveFav(), JSON.stringify([...E.fav])); } catch (_) {}
+}
+const CORACAO = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.4 3 4.5 6.7 4.5c2.1 0 3.6 1.2 4.3 2.4h2c.7-1.2 2.2-2.4 4.3-2.4 3.7 0 5.8 3.9 4.3 7.3C19.5 16.4 12 21 12 21Z"/></svg>';
+function btnFav(m) {
+  const on = E.fav.has(m.id);
+  return `<button class="btn-fav ${on ? "on" : ""}" data-fav="${m.id}" aria-label="${on ? "Tirar dos favoritos" : "Salvar nos favoritos"}">${CORACAO}</button>`;
+}
+function alternarFav(id) {
+  if (E.fav.has(id)) E.fav.delete(id); else { E.fav.add(id); aviso("❤️ Salvo nos seus favoritos"); }
+  salvarFavoritos();
+  document.querySelectorAll(`[data-fav="${id}"]`).forEach((b) => b.classList.toggle("on", E.fav.has(id)));
+  renderBarraFav();
+}
+function atualizarFavDetalhe() {
+  const b = $("#detalhe-fav"); if (!b || !E.det) return;
+  b.dataset.fav = E.det.m.id;
+  b.classList.toggle("on", E.fav.has(E.det.m.id));
+}
+function favoritosValidos() { return E.imoveis.filter((m) => E.fav.has(m.id)); }
+function renderBarraFav() {
+  let bar = $("#barra-fav");
+  const lista = favoritosValidos();
+  if (!lista.length) { bar?.remove(); return; }
+  if (!bar) {
+    document.body.insertAdjacentHTML("beforeend", `<button class="barra-fav" id="barra-fav"></button>`);
+    bar = $("#barra-fav");
+    bar.onclick = abrirFavoritos;
+  }
+  bar.innerHTML = `${CORACAO}<span>${plural(lista.length, "favorito", "favoritos")}</span>`;
+}
+function abrirFavoritos() {
+  const lista = favoritosValidos();
+  const folha = document.createElement("div");
+  folha.className = "folha-fundo"; folha.id = "folha-fav";
+  folha.innerHTML = `<div class="folha">
+    <div class="folha-topo"><h2>Meus favoritos</h2><button class="btn-x" data-fechar aria-label="Fechar">✕</button></div>
+    <div class="folha-corpo">
+      ${lista.map((m) => `<div class="fav-item" data-abrir="${m.id}">
+        <div class="fav-foto" style="${m.fotos[0] ? `background-image:url('${esc(m.fotos[0])}')` : ""}"></div>
+        <div class="fav-info"><b>${esc(m.titulo)}</b><span>${esc([m.codigo ? "Cód. " + m.codigo : "", m.bairro].filter(Boolean).join(" · "))}</span></div>
+        <button class="btn-x" data-tirar-fav="${m.id}" aria-label="Remover">✕</button>
+      </div>`).join("")}
+      <p style="color:var(--muted);font-size:13px;margin:14px 0 0">Seus favoritos ficam salvos neste aparelho.</p>
+    </div>
+    <div class="folha-rodape">
+      ${numeroDestino() ? `<button class="btn btn-wpp" id="enviar-favs" style="flex:1">💬 Enviar favoritos no WhatsApp</button>` : ""}
+    </div>
+  </div>`;
+  document.body.appendChild(folha); travar(true);
+  const fechar = () => { folha.remove(); travar(!!E.det); };
+  folha.onclick = (ev) => {
+    if (ev.target === folha || ev.target.closest("[data-fechar]")) return fechar();
+    const t = ev.target.closest("[data-tirar-fav]");
+    if (t) { alternarFav(t.dataset.tirarFav); fechar(); if (favoritosValidos().length) abrirFavoritos(); return; }
+    const ab = ev.target.closest("[data-abrir]");
+    if (ab) { fechar(); abrirDetalhe(E.imoveis.find((m) => m.id === ab.dataset.abrir)); }
+  };
+  $("#enviar-favs")?.addEventListener("click", () => {
+    const linhas = [`Olá! Vi no site da *${E.imob.nome}* e gostei destes imóveis:`, ""];
+    lista.forEach((m, i) => linhas.push(`${i + 1}. *${m.titulo}*${m.codigo ? ` (Cód. ${m.codigo})` : ""}`, `   🔗 ${linkImovel(m)}`));
+    linhas.push("", "Pode me passar mais informações?");
+    window.open(linkWpp(linhas.join("\n")), "_blank", "noopener");
+  });
 }
 
 /* =====================================================================
@@ -299,6 +449,8 @@ function renderVitrine() {
   }
   grade.innerHTML = lista.map((m) => cardHtml(m, comDatas)).join("");
   grade.onclick = (ev) => {
+    const fb = ev.target.closest("[data-fav]");
+    if (fb) { ev.stopPropagation(); alternarFav(fb.dataset.fav); return; }
     const c = ev.target.closest(".card"); if (!c) return;
     abrirDetalhe(E.imoveis.find((m) => m.id === c.dataset.id));
   };
@@ -339,15 +491,22 @@ function cardHtml(m, comDatas) {
   const selos = [];
   if (comDatas) selos.push(`<span class="livre">✓ Livre nas suas datas</span>`);
   if (E.aba === "comprar" && m.prevenda && !m.venda) selos.push(`<span class="lanc">Lançamento</span>`);
-  if (m.distancia_praia) selos.push(`<span>🌊 ${esc(m.distancia_praia)}</span>`);
+  const meus = (m.selos || []).slice(0, 2);
+  for (const s of meus) selos.push(`<span class="destaque">${esc(s)}</span>`);
+  const dist = (m.distancia_praia || "").trim();
+  if (dist && selos.length < 2 && !meus.some((s) => s.toLowerCase() === dist.toLowerCase())) selos.push(`<span>🌊 ${esc(dist)}</span>`);
   const local = [m.tipo, m.bairro].filter(Boolean).join(" · ");
   return `<article class="card" data-id="${m.id}">
     <div class="card-foto">
       ${foto ? `<img src="${esc(foto)}" alt="${esc(m.titulo)}" loading="lazy">` : `<div class="sem-foto">🏠</div>`}
       ${selos.length ? `<div class="card-selo">${selos.join("")}</div>` : ""}
-      ${m.fotos.length > 1 ? `<span class="card-nfotos">📷 ${m.fotos.length}</span>` : ""}
+      <div class="card-dir">
+        ${m.fotos.length > 1 ? `<span class="card-nfotos">📷 ${m.fotos.length}</span>` : ""}
+        ${btnFav(m)}
+      </div>
     </div>
     <div class="card-info">
+      ${m.codigo ? `<div class="card-cod">Cód. ${esc(m.codigo)}</div>` : ""}
       <h3>${esc(m.titulo)}</h3>
       ${local ? `<div class="card-local">${esc(local)}</div>` : ""}
       <div class="card-carac">${caracteristicas(m).slice(0, 5).map(([i, t]) => `<span>${i} ${esc(t)}</span>`).join("")}</div>
@@ -471,6 +630,7 @@ function abrirDetalhe(m, viaLink = false) {
   E.det.mes = new Date(base.getFullYear(), base.getMonth(), 1);
 
   renderDetalhe();
+  atualizarFavDetalhe();
   $("#detalhe").classList.remove("hidden");
   $("#detalhe-scroll").scrollTop = 0;
   travar(true);
@@ -500,6 +660,7 @@ window.addEventListener("popstate", () => {
 });
 function urlSemImovel() { const u = new URL(location.href); u.searchParams.delete("m"); return u.toString(); }
 
+$("#detalhe-fav").onclick = () => { if (E.det) { alternarFav(E.det.m.id); atualizarFavDetalhe(); } };
 $("#detalhe-compartilhar").onclick = async () => {
   const m = E.det?.m; if (!m) return;
   const url = linkImovel(m);
@@ -522,7 +683,9 @@ function renderDetalhe() {
     <div class="det-max">
       ${galeriaHtml(m)}
       <div class="det-corpo">
+        ${m.codigo ? `<div class="card-cod">Cód. ${esc(m.codigo)}</div>` : ""}
         <h1>${esc(m.titulo)}</h1>
+        ${m.selos?.length ? `<div class="det-selos">${m.selos.map((s) => `<span>${esc(s)}</span>`).join("")}</div>` : ""}
         ${local ? `<div class="det-local">${esc(local)}${m.distancia_praia ? ` · 🌊 ${esc(m.distancia_praia)}` : ""}</div>` : ""}
 
         <div class="det-precos">${precosDetalhe(m)}</div>
@@ -717,7 +880,7 @@ function renderAcao() {
 
 function enviarWhatsApp() {
   const d = E.det, m = d.m;
-  const linhas = [`Olá! Vi no site da *${E.imob.nome}* e tenho interesse neste imóvel:`, "", `🏠 *${m.titulo}*`];
+  const linhas = [`Olá! Vi no site da *${E.imob.nome}* e tenho interesse neste imóvel:`, "", `🏠 *${m.titulo}*${m.codigo ? ` (Cód. ${m.codigo})` : ""}`];
   if (m.bairro) linhas.push(`📍 ${m.bairro}`);
   if (d.modo === "temporada") {
     const pessoas = parseInt($("#orc-pessoas")?.value || d.pessoas, 10);
