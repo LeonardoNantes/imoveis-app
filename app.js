@@ -171,13 +171,22 @@ function aplicarMarca() {
   $("#topo-nome").textContent = im.nome;
 
   const hero = $("#hero");
-  if (im.capa_url) hero.style.backgroundImage = `url('${im.capa_url}')`;
-  $("#hero-titulo").textContent = im.slogan || im.nome;
-  $("#hero-sub").textContent = im.slogan ? im.nome : "Encontre o imóvel ideal para você";
-  if (E.corretor) {
-    const hc = $("#hero-corretor");
-    hc.textContent = `👤 Atendimento: ${E.corretor.nome}`;
-    hc.classList.remove("hidden");
+  if (im.capa_modo === "banner" && im.capa_url) {
+    // Banner pronto (já tem logo/nome na arte): mostra a imagem inteira, sem texto por cima
+    hero.classList.add("hero-banner");
+    hero.innerHTML = `<img src="${esc(im.capa_url)}" alt="${esc(im.nome)}">`;
+    if (E.corretor) {
+      hero.insertAdjacentHTML("afterend", `<div class="faixa-corretor">👤 Atendimento: <b>${esc(E.corretor.nome)}</b></div>`);
+    }
+  } else {
+    if (im.capa_url) hero.style.backgroundImage = `url('${im.capa_url}')`;
+    $("#hero-titulo").textContent = im.slogan || im.nome;
+    $("#hero-sub").textContent = im.slogan ? im.nome : "Encontre o imóvel ideal para você";
+    if (E.corretor) {
+      const hc = $("#hero-corretor");
+      hc.textContent = `👤 Atendimento: ${E.corretor.nome}`;
+      hc.classList.remove("hidden");
+    }
   }
 
   const wpp = linkWpp(`Olá! Vim pelo site da ${im.nome} e gostaria de mais informações.`);

@@ -104,6 +104,14 @@ body[data-modelo="luxo"] .hero h1 { font-size: 30px; letter-spacing: .5px; }
 body[data-modelo="moderno"] .hero { margin: 12px 12px 0; border-radius: var(--raio); overflow: hidden; }
 @media (min-width: 760px) { .hero { min-height: 300px; } .hero h1 { font-size: 36px; } }
 
+/* capa no formato "banner pronto": imagem inteira, sem corte e sem texto por cima */
+.hero.hero-banner { min-height: 0; display: block; background: var(--topo-bg); }
+.hero.hero-banner::before { display: none; }
+.hero.hero-banner img { display: block; width: 100%; height: auto; max-height: 420px; object-fit: contain; margin: 0 auto; }
+body[data-modelo="moderno"] .hero.hero-banner { background: transparent; }
+.faixa-corretor { max-width: 1100px; margin: 10px auto 0; padding: 0 16px; font-size: 14px; color: var(--muted); }
+.faixa-corretor b { color: var(--texto); }
+
 /* ---------- abas ---------- */
 .abas {
   position: sticky; top: calc(62px + env(safe-area-inset-top)); z-index: 20; background: var(--fundo);
@@ -152,7 +160,7 @@ body[data-modelo="luxo"] .card { border-color: var(--borda); }
 .card-selo span { background: rgba(255,255,255,.94); color: #18202b; font-size: 12px; font-weight: 700; padding: 4px 9px; border-radius: 99px; }
 .card-selo span.livre { background: var(--livre); color: #fff; }
 .card-selo span.lanc { background: var(--dest); color: #fff; }
-.card-nfotos { position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,.55); color: #fff; font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 99px; }
+.card-nfotos { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,.55); color: #fff; font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 99px; }
 .card-info { padding: 14px 16px 16px; }
 .card-info h3 { font-size: 17px; font-weight: 700; margin-bottom: 3px; }
 .card-local { color: var(--muted); font-size: 14px; }
