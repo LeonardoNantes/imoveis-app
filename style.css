@@ -359,3 +359,14 @@ body[data-modelo="luxo"] .hero-pessoa-nome small { color: var(--dest); }
 @media (prefers-reduced-motion: reduce) { .hero-pessoa, .hero-pessoa-nome, .wpp-flutuante { animation: none; } }
 
 .rodape { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+
+/* foto com fundo: aparece em círculo, estilo foto de perfil */
+.hero-pessoa.em-circulo { height: auto; max-height: none; bottom: 50%; transform: translateY(50%); right: 4%; flex-direction: column; align-items: center;
+  animation-name: pessoaSobeCirculo; }
+.hero-pessoa.em-circulo img { width: clamp(104px, 22vw, 160px); height: clamp(104px, 22vw, 160px); max-width: none; border-radius: 50%;
+  object-fit: cover; object-position: center 25%; border: 4px solid #fff; box-shadow: 0 8px 26px rgba(0,0,0,.35); filter: none; }
+body[data-modelo="luxo"] .hero-pessoa.em-circulo img { border-color: var(--dest); }
+.hero-pessoa.em-circulo .hero-pessoa-nome { position: relative; left: auto; bottom: auto; transform: none; margin-top: -16px; animation-name: apareceSimples; }
+@keyframes pessoaSobeCirculo { from { transform: translateY(calc(50% + 60px)); opacity: 0; } to { transform: translateY(50%); opacity: 1; } }
+@keyframes apareceSimples { from { opacity: 0; } }
+@media (max-width: 420px) { .hero-pessoa.em-circulo img { width: 104px; height: 104px; border-width: 3px; } .hero-pessoa.em-circulo .hero-pessoa-nome { margin-top: -12px; } }

@@ -218,15 +218,16 @@ function aplicarMarca() {
 }
 
 /* ---------------- corretor na capa (foto "subindo") ---------------- */
-function renderPessoaHero() {
+async function renderPessoaHero() {
   const p = E.pessoa;
   if (!p?.foto) return;   // sem foto: fica só o selo "Atendimento: Fulano"
+  const recortada = await fotoSemFundo(p.foto);
   const hero = $("#hero");
   hero.classList.add("com-pessoa");
   $("#hero-corretor")?.classList.add("hidden");
   document.querySelector(".faixa-corretor")?.remove();
   hero.insertAdjacentHTML("beforeend", `
-    <button class="hero-pessoa" id="hero-pessoa" aria-label="Falar com ${esc(p.nome)} no WhatsApp">
+    <button class="hero-pessoa ${recortada ? "" : "em-circulo"}" id="hero-pessoa" aria-label="Falar com ${esc(p.nome)} no WhatsApp">
       <img src="${esc(p.foto)}" alt="${esc(p.nome)}">
       <span class="hero-pessoa-nome"><b>${esc(p.nome)}</b><small>${esc(p.papel)}</small></span>
     </button>`);
@@ -234,6 +235,33 @@ function renderPessoaHero() {
     const url = linkWpp(`Olá, ${p.nome.split(" ")[0]}! Vim pelo site da ${E.imob.nome} e gostaria de ajuda para encontrar um imóvel.`);
     if (url) window.open(url, "_blank", "noopener");
   };
+}
+
+// Descobre se a foto está recortada (fundo transparente) olhando a transparência das bordas.
+// Foto com fundo (ou se não der para analisar) -> mostra em círculo.
+function fotoSemFundo(url) {
+  return new Promise((ok) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    const fim = setTimeout(() => ok(false), 2500);
+    img.onerror = () => { clearTimeout(fim); ok(false); };
+    img.onload = () => {
+      clearTimeout(fim);
+      try {
+        const w = 60, h = Math.max(1, Math.round(60 * img.naturalHeight / img.naturalWidth));
+        const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+        const ctx = cv.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        const px = ctx.getImageData(0, 0, w, h).data;
+        const alfa = (x, y) => px[(y * w + x) * 4 + 3];
+        // cantos de cima e laterais: numa foto recortada são transparentes
+        const pontos = [[0, 0], [w - 1, 0], [0, Math.floor(h / 3)], [w - 1, Math.floor(h / 3)], [Math.floor(w / 2), 0]];
+        const transparentes = pontos.filter(([x, y]) => alfa(x, y) < 20).length;
+        ok(transparentes >= 3);
+      } catch (_) { ok(false); }
+    };
+    img.src = url;
+  });
 }
 
 /* ---------------- redes sociais ---------------- */
