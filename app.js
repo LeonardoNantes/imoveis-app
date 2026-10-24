@@ -1,0 +1,724 @@
+/* =====================================================================
+   SITE DOS CLIENTES (vitrine de imóveis)
+   Links:
+     ?i=<link-da-imobiliaria>  -> pedidos vão para o WhatsApp da imobiliária
+     ?c=<link-do-corretor>     -> pedidos vão para o WhatsApp do corretor
+     &m=<id-do-imovel>         -> abre direto um imóvel (link compartilhado)
+   ===================================================================== */
+const C = window.CONFIG;
+const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: false } });
+const PARAMS = new URLSearchParams(location.search);
+
+const ABAS = [
+  { id: "temporada", nome: "Temporada", tem: (m) => m.temporada },
+  { id: "alugar", nome: "Alugar", tem: (m) => m.mensal || m.anual },
+  { id: "comprar", nome: "Comprar", tem: (m) => m.venda || m.prevenda },
+];
+const FILTRO_VAZIO = { entrada: "", saida: "", pessoas: 0, quartos: 0, bairro: "", tipo: "", ordem: "padrao" };
+
+const E = {
+  imob: null,
+  corretor: null,      // { nome, whatsapp } quando o link é de um corretor
+  imoveis: [],
+  ocupadas: new Map(), // imovel_id -> Set de datas "AAAA-MM-DD"
+  aba: null,
+  filtro: { ...FILTRO_VAZIO },
+  det: null,           // estado da tela de detalhe
+};
+
+/* ---------------- utilidades ---------------- */
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const moeda = (v) => Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: Number(v) % 1 ? 2 : 0 });
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const deYmd = (s) => { const [a, m, d] = s.split("-").map(Number); return new Date(a, m - 1, d); };
+const hoje = () => ymd(new Date());
+const somaDias = (s, n) => { const d = deYmd(s); d.setDate(d.getDate() + n); return ymd(d); };
+const noites = (a, b) => Math.round((deYmd(b) - deYmd(a)) / 86400000);
+const dataCurta = (s) => deYmd(s).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+const dataLonga = (s) => {
+  const d = deYmd(s);
+  return `${d.toLocaleDateString("pt-BR")} (${d.toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "")})`;
+};
+const plural = (n, s, p) => `${n} ${n == 1 ? s : p}`;
+
+function ytId(url) {
+  if (!url) return null;
+  const m = String(url).match(/(?:youtu\.be\/|v=|\/embed\/|\/shorts\/|\/live\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+let avisoT;
+function aviso(msg) {
+  const el = $("#aviso");
+  el.textContent = msg; el.classList.remove("hidden");
+  clearTimeout(avisoT); avisoT = setTimeout(() => el.classList.add("hidden"), 2600);
+}
+
+function travar(on) { document.body.classList.toggle("travado", on); }
+
+/* ---------------- WhatsApp ---------------- */
+function numeroDestino() {
+  return (E.corretor?.whatsapp || E.imob?.whatsapp || "").replace(/\D/g, "");
+}
+function linkWpp(texto) {
+  const n = numeroDestino();
+  return n ? `https://wa.me/${n}?text=${encodeURIComponent(texto)}` : null;
+}
+function linkImovel(m) {
+  const u = new URL(location.href);
+  u.search = "";
+  if (PARAMS.get("c")) u.searchParams.set("c", PARAMS.get("c"));
+  else u.searchParams.set("i", E.imob.slug);
+  u.searchParams.set("m", m.id);
+  return u.toString();
+}
+
+/* =====================================================================
+   INÍCIO
+   ===================================================================== */
+async function iniciar() {
+  try {
+    let slugImob = PARAMS.get("i");
+    const slugCorretor = PARAMS.get("c");
+
+    if (slugCorretor) {
+      const { data } = await sb.rpc("loc_corretor_publico", { p_slug: slugCorretor });
+      const c = data?.[0];
+      if (c) { E.corretor = { nome: c.nome, whatsapp: c.whatsapp }; slugImob = c.imobiliaria_slug; }
+    }
+    if (!slugImob) return erro();
+
+    const { data: imob } = await sb.from("loc_imobiliarias").select("*").eq("slug", slugImob).eq("ativo", true).maybeSingle();
+    if (!imob) return erro();
+    E.imob = imob;
+    aplicarMarca();
+
+    const [{ data: imoveis, error }, ocupadas] = await Promise.all([
+      sb.from("loc_imoveis")
+        .select("*, loc_fotos(url, ordem)")
+        .eq("imobiliaria_id", imob.id).eq("ativo", true)
+        .order("ordem").order("created_at"),
+      carregarOcupadas(imob.id),
+    ]);
+    if (error) throw error;
+    E.imoveis = (imoveis || []).map((m) => ({
+      ...m, fotos: (m.loc_fotos || []).sort((a, b) => a.ordem - b.ordem).map((f) => f.url),
+    }));
+    E.ocupadas = ocupadas;
+
+    const abaUrl = PARAMS.get("t");
+    E.aba = ABAS.find((a) => a.id === abaUrl && contar(a) > 0)?.id || ABAS.find((a) => contar(a) > 0)?.id || "temporada";
+
+    $("#tela-carregando").classList.add("hidden");
+    $("#app").classList.remove("hidden");
+    renderAbas();
+    renderVitrine();
+
+    const mId = PARAMS.get("m");
+    if (mId) { const m = E.imoveis.find((x) => x.id === mId); if (m) abrirDetalhe(m, true); }
+  } catch (e) {
+    console.error(e);
+    erro();
+  }
+}
+
+function erro() {
+  $("#tela-carregando").classList.add("hidden");
+  $("#tela-erro").classList.remove("hidden");
+}
+
+// Datas ocupadas daqui pra frente (em páginas de 1000, para imobiliárias grandes)
+async function carregarOcupadas(imobId) {
+  const mapa = new Map();
+  const passo = 1000;
+  for (let ini = 0; ; ini += passo) {
+    const { data, error } = await sb.from("loc_datas_ocupadas")
+      .select("imovel_id, data").eq("imobiliaria_id", imobId).gte("data", hoje())
+      .order("data").range(ini, ini + passo - 1);
+    if (error) throw error;
+    for (const r of data || []) {
+      if (!mapa.has(r.imovel_id)) mapa.set(r.imovel_id, new Set());
+      mapa.get(r.imovel_id).add(r.data);
+    }
+    if (!data || data.length < passo) break;
+  }
+  return mapa;
+}
+
+/* ---------------- marca da imobiliária ---------------- */
+const FONTES = {
+  moderna: "Inter, system-ui, sans-serif",
+  classica: "Georgia, 'Times New Roman', serif",
+  elegante: "'Playfair Display', Georgia, serif",
+};
+
+function aplicarMarca() {
+  const im = E.imob;
+  const r = document.documentElement.style;
+  r.setProperty("--cor", im.cor_principal || "#0d2c4a");
+  r.setProperty("--dest", im.cor_destaque || "#d99a3a");
+  r.setProperty("--fonte-titulo", FONTES[im.fonte] || FONTES.moderna);
+  document.body.dataset.modelo = ["classico", "moderno", "luxo"].includes(im.modelo) ? im.modelo : "classico";
+  $('meta[name="theme-color"]').setAttribute("content", im.modelo === "luxo" ? "#0e0f11" : im.modelo === "moderno" ? "#ffffff" : im.cor_principal);
+  document.title = im.nome;
+
+  $("#topo-logo").innerHTML = im.logo_url ? `<img src="${esc(im.logo_url)}" alt="">` : "🏠";
+  if (im.logo_url) {
+    // favicon com a logo da imobiliária
+    const l = document.createElement("link"); l.rel = "icon"; l.href = im.logo_url; document.head.appendChild(l);
+  }
+  $("#topo-nome").textContent = im.nome;
+
+  const hero = $("#hero");
+  if (im.capa_url) hero.style.backgroundImage = `url('${im.capa_url}')`;
+  $("#hero-titulo").textContent = im.slogan || im.nome;
+  $("#hero-sub").textContent = im.slogan ? im.nome : "Encontre o imóvel ideal para você";
+  if (E.corretor) {
+    const hc = $("#hero-corretor");
+    hc.textContent = `👤 Atendimento: ${E.corretor.nome}`;
+    hc.classList.remove("hidden");
+  }
+
+  const wpp = linkWpp(`Olá! Vim pelo site da ${im.nome} e gostaria de mais informações.`);
+  if (wpp) { const a = $("#topo-wpp"); a.href = wpp; a.classList.remove("hidden"); }
+
+  $("#rodape").innerHTML = `<b>${esc(im.nome)}</b>${E.corretor ? `<br>Atendimento: ${esc(E.corretor.nome)}` : ""}`;
+}
+
+/* =====================================================================
+   ABAS E FILTROS
+   ===================================================================== */
+function contar(aba) { return E.imoveis.filter(aba.tem).length; }
+
+function renderAbas() {
+  const visiveis = ABAS.filter((a) => contar(a) > 0);
+  const nav = $("#abas");
+  if (visiveis.length <= 1) { nav.classList.add("hidden"); return; }
+  nav.innerHTML = visiveis.map((a) =>
+    `<button class="aba ${a.id === E.aba ? "ativa" : ""}" data-aba="${a.id}">${a.nome}<span class="n">${contar(a)}</span></button>`).join("");
+  nav.onclick = (ev) => {
+    const b = ev.target.closest(".aba"); if (!b) return;
+    E.aba = b.dataset.aba;
+    nav.querySelectorAll(".aba").forEach((x) => x.classList.toggle("ativa", x === b));
+    renderVitrine();
+  };
+}
+
+function livreNoPeriodo(m, entrada, saida) {
+  const oc = E.ocupadas.get(m.id);
+  if (!oc) return true;
+  for (let d = entrada; d < saida; d = somaDias(d, 1)) if (oc.has(d)) return false;
+  return true;
+}
+
+function precoBase(m) {
+  if (E.aba === "temporada") return m.valor_diaria;
+  if (E.aba === "alugar") return m.mensal ? m.valor_mensal : m.valor_anual;
+  return m.venda ? m.valor_venda : m.valor_prevenda;
+}
+
+function filtrar(f = E.filtro) {
+  const aba = ABAS.find((a) => a.id === E.aba);
+  let lista = E.imoveis.filter(aba.tem);
+  const comDatas = E.aba === "temporada" && f.entrada && f.saida && f.saida > f.entrada;
+  if (comDatas) lista = lista.filter((m) => livreNoPeriodo(m, f.entrada, f.saida));
+  if (f.pessoas) lista = lista.filter((m) => !m.capacidade || m.capacidade >= f.pessoas);
+  if (f.quartos) lista = lista.filter((m) => (m.quartos ?? 0) >= f.quartos);
+  if (f.bairro) lista = lista.filter((m) => (m.bairro || "") === f.bairro);
+  if (f.tipo) lista = lista.filter((m) => (m.tipo || "") === f.tipo);
+  if (f.ordem !== "padrao") {
+    const v = (m) => precoBase(m) ?? (f.ordem === "menor" ? Infinity : -Infinity);
+    lista = [...lista].sort((a, b) => f.ordem === "menor" ? v(a) - v(b) : v(b) - v(a));
+  }
+  return lista;
+}
+
+function filtrosAtivos() {
+  const f = E.filtro, out = [];
+  if (E.aba === "temporada" && f.entrada && f.saida) out.push(["datas", `${dataCurta(f.entrada)} → ${dataCurta(f.saida)}`]);
+  if (f.pessoas) out.push(["pessoas", plural(f.pessoas, "pessoa", "pessoas")]);
+  if (f.quartos) out.push(["quartos", `${f.quartos}+ quartos`]);
+  if (f.bairro) out.push(["bairro", f.bairro]);
+  if (f.tipo) out.push(["tipo", f.tipo]);
+  if (f.ordem !== "padrao") out.push(["ordem", f.ordem === "menor" ? "Menor preço" : "Maior preço"]);
+  return out;
+}
+
+/* =====================================================================
+   VITRINE
+   ===================================================================== */
+function renderVitrine() {
+  const lista = filtrar();
+  const ativos = filtrosAtivos();
+  const badge = $("#filtro-badge");
+  badge.textContent = ativos.length; badge.classList.toggle("hidden", !ativos.length);
+  $("#chips-ativos").innerHTML = ativos.map(([k, t]) =>
+    `<span class="chip-ativo">${esc(t)}<button data-tirar="${k}" aria-label="Remover filtro">✕</button></span>`).join("");
+  $("#chips-ativos").onclick = (ev) => {
+    const b = ev.target.closest("[data-tirar]"); if (!b) return;
+    const k = b.dataset.tirar;
+    if (k === "datas") { E.filtro.entrada = ""; E.filtro.saida = ""; }
+    else E.filtro[k] = FILTRO_VAZIO[k];
+    renderVitrine();
+  };
+
+  const f = E.filtro;
+  const comDatas = E.aba === "temporada" && f.entrada && f.saida;
+  $("#contagem").textContent = comDatas
+    ? `${plural(lista.length, "imóvel livre", "imóveis livres")} de ${dataCurta(f.entrada)} a ${dataCurta(f.saida)} (${plural(noites(f.entrada, f.saida), "diária", "diárias")})`
+    : plural(lista.length, "imóvel", "imóveis");
+
+  const grade = $("#grade");
+  if (!E.imoveis.length) {
+    grade.innerHTML = `<div class="vazio">Nenhum imóvel disponível no momento.<br>Fale com a gente pelo WhatsApp!</div>`;
+    return;
+  }
+  if (!lista.length) {
+    grade.innerHTML = `<div class="vazio">Nenhum imóvel encontrado com esses filtros.<br><b>Tente mudar as datas ou limpar os filtros.</b></div>`;
+    return;
+  }
+  grade.innerHTML = lista.map((m) => cardHtml(m, comDatas)).join("");
+  grade.onclick = (ev) => {
+    const c = ev.target.closest(".card"); if (!c) return;
+    abrirDetalhe(E.imoveis.find((m) => m.id === c.dataset.id));
+  };
+}
+
+function caracteristicas(m) {
+  const c = [];
+  if (m.quartos != null) c.push(["🛏", plural(m.quartos, "quarto", "quartos")]);
+  if (m.banheiros != null) c.push(["🚿", plural(m.banheiros, "banheiro", "banheiros")]);
+  if (m.capacidade) c.push(["👥", `até ${m.capacidade}`]);
+  if (m.vagas) c.push(["🚗", plural(m.vagas, "vaga", "vagas")]);
+  if (m.area_m2) c.push(["📐", `${Number(m.area_m2).toLocaleString("pt-BR")} m²`]);
+  return c;
+}
+
+function precoCard(m, comDatas) {
+  const f = E.filtro;
+  if (E.aba === "temporada") {
+    if (!m.valor_diaria) return `<span class="valor">Consulte</span><span class="por">valores</span>`;
+    const extra = comDatas ? `<span class="extra">Referência para ${plural(noites(f.entrada, f.saida), "diária", "diárias")}: ${moeda(m.valor_diaria * noites(f.entrada, f.saida))}</span>` : "";
+    return `<span class="valor">${moeda(m.valor_diaria)}</span><span class="por">/ diária</span>${extra}`;
+  }
+  if (E.aba === "alugar") {
+    const v = m.mensal ? m.valor_mensal : m.valor_anual;
+    const tipo = m.mensal && m.anual ? "mensal ou anual" : m.mensal ? "aluguel mensal" : "contrato anual";
+    return v ? `<span class="valor">${moeda(v)}</span><span class="por">/ mês</span><span class="extra">${tipo}</span>`
+             : `<span class="valor">Consulte</span><span class="por">${tipo}</span>`;
+  }
+  const v = m.venda ? m.valor_venda : m.valor_prevenda;
+  const pre = !m.venda && m.prevenda;
+  return v ? `${pre ? `<span class="por">a partir de</span>` : ""}<span class="valor">${moeda(v)}</span>`
+           : `<span class="valor">Sob consulta</span>`;
+}
+
+function cardHtml(m, comDatas) {
+  const foto = m.fotos[0];
+  const selos = [];
+  if (comDatas) selos.push(`<span class="livre">✓ Livre nas suas datas</span>`);
+  if (E.aba === "comprar" && m.prevenda && !m.venda) selos.push(`<span class="lanc">Lançamento</span>`);
+  if (m.distancia_praia) selos.push(`<span>🌊 ${esc(m.distancia_praia)}</span>`);
+  const local = [m.tipo, m.bairro].filter(Boolean).join(" · ");
+  return `<article class="card" data-id="${m.id}">
+    <div class="card-foto">
+      ${foto ? `<img src="${esc(foto)}" alt="${esc(m.titulo)}" loading="lazy">` : `<div class="sem-foto">🏠</div>`}
+      ${selos.length ? `<div class="card-selo">${selos.join("")}</div>` : ""}
+      ${m.fotos.length > 1 ? `<span class="card-nfotos">📷 ${m.fotos.length}</span>` : ""}
+    </div>
+    <div class="card-info">
+      <h3>${esc(m.titulo)}</h3>
+      ${local ? `<div class="card-local">${esc(local)}</div>` : ""}
+      <div class="card-carac">${caracteristicas(m).slice(0, 4).map(([i, t]) => `<span>${i} ${esc(t)}</span>`).join("")}</div>
+      <div class="card-preco">${precoCard(m, comDatas)}</div>
+    </div>
+  </article>`;
+}
+
+/* =====================================================================
+   FOLHA DE FILTROS
+   ===================================================================== */
+let rascunho = null;
+
+$("#btn-filtro").onclick = abrirFiltros;
+function abrirFiltros() {
+  rascunho = { ...E.filtro };
+  renderFiltros();
+  $("#folha-filtro").classList.remove("hidden");
+  travar(true);
+}
+function fecharFiltros() { $("#folha-filtro").classList.add("hidden"); travar(false); }
+$("#folha-filtro").onclick = (ev) => {
+  if (ev.target.id === "folha-filtro" || ev.target.closest("[data-fechar]")) fecharFiltros();
+};
+$("#filtro-limpar").onclick = () => { rascunho = { ...FILTRO_VAZIO }; renderFiltros(); };
+$("#filtro-aplicar").onclick = () => {
+  if (rascunho.entrada && rascunho.saida && rascunho.saida <= rascunho.entrada) { aviso("A saída precisa ser depois da entrada."); return; }
+  if ((rascunho.entrada && !rascunho.saida) || (!rascunho.entrada && rascunho.saida)) { aviso("Escolha a data de entrada e a de saída."); return; }
+  E.filtro = { ...rascunho };
+  fecharFiltros();
+  renderVitrine();
+  window.scrollTo({ top: $("#abas").offsetTop - 70, behavior: "smooth" });
+};
+
+function opcoesUnicas(campo) {
+  const aba = ABAS.find((a) => a.id === E.aba);
+  return [...new Set(E.imoveis.filter(aba.tem).map((m) => m[campo]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+
+function renderFiltros() {
+  const r = rascunho;
+  const bairros = opcoesUnicas("bairro"), tipos = opcoesUnicas("tipo");
+  $("#filtro-corpo").innerHTML = `
+    ${E.aba === "temporada" ? `
+    <div class="grupo">
+      <h3>Quando você vem?</h3>
+      <p class="dica">Mostramos só os imóveis livres no período todo.</p>
+      <div class="datas">
+        <label class="campo">Entrada<input type="date" id="f-entrada" min="${hoje()}" value="${r.entrada}"></label>
+        <label class="campo">Saída<input type="date" id="f-saida" min="${r.entrada ? somaDias(r.entrada, 1) : somaDias(hoje(), 1)}" value="${r.saida}"></label>
+      </div>
+    </div>` : ""}
+    <div class="grupo contador">
+      <h3 style="margin:0">Pessoas</h3>
+      <div class="ctrl"><button data-p="-1" aria-label="Menos">−</button><b>${r.pessoas || "—"}</b><button data-p="1" aria-label="Mais">+</button></div>
+    </div>
+    <div class="grupo">
+      <h3>Quartos</h3>
+      <div class="opcoes" data-grupo="quartos">
+        ${[0, 1, 2, 3, 4].map((q) => `<button class="opcao ${r.quartos === q ? "on" : ""}" data-v="${q}">${q ? q + "+" : "Qualquer"}</button>`).join("")}
+      </div>
+    </div>
+    ${bairros.length > 1 ? `<div class="grupo"><label class="campo">Bairro<select id="f-bairro"><option value="">Todos</option>
+      ${bairros.map((b) => `<option ${r.bairro === b ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></label></div>` : ""}
+    ${tipos.length > 1 ? `<div class="grupo"><label class="campo">Tipo de imóvel<select id="f-tipo"><option value="">Todos</option>
+      ${tipos.map((t) => `<option ${r.tipo === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label></div>` : ""}
+    <div class="grupo">
+      <h3>Ordenar por</h3>
+      <div class="opcoes" data-grupo="ordem">
+        ${[["padrao", "Destaques"], ["menor", "Menor preço"], ["maior", "Maior preço"]].map(([v, t]) =>
+          `<button class="opcao ${r.ordem === v ? "on" : ""}" data-v="${v}">${t}</button>`).join("")}
+      </div>
+    </div>
+  `;
+  atualizarBotaoAplicar();
+
+  const corpo = $("#filtro-corpo");
+  corpo.onclick = (ev) => {
+    const p = ev.target.closest("[data-p]");
+    if (p) { r.pessoas = Math.max(0, Math.min(30, (r.pessoas || 0) + Number(p.dataset.p))); renderFiltros(); return; }
+    const o = ev.target.closest(".opcao");
+    if (o) {
+      const g = o.parentElement.dataset.grupo;
+      r[g] = g === "quartos" ? Number(o.dataset.v) : o.dataset.v;
+      renderFiltros();
+    }
+  };
+  $("#f-entrada")?.addEventListener("change", (ev) => {
+    r.entrada = ev.target.value;
+    if (r.saida && r.saida <= r.entrada) r.saida = "";
+    renderFiltros();
+    if (r.entrada && !r.saida) { try { $("#f-saida")?.showPicker?.(); } catch (_) {} }
+  });
+  $("#f-saida")?.addEventListener("change", (ev) => { r.saida = ev.target.value; renderFiltros(); });
+  $("#f-bairro")?.addEventListener("change", (ev) => { r.bairro = ev.target.value; atualizarBotaoAplicar(); });
+  $("#f-tipo")?.addEventListener("change", (ev) => { r.tipo = ev.target.value; atualizarBotaoAplicar(); });
+}
+
+function atualizarBotaoAplicar() {
+  const r = rascunho;
+  const valido = !(r.entrada || r.saida) || (r.entrada && r.saida && r.saida > r.entrada);
+  const n = filtrar(valido ? r : { ...r, entrada: "", saida: "" }).length;
+  $("#filtro-aplicar").textContent = n ? `Ver ${plural(n, "imóvel", "imóveis")}` : "Nenhum imóvel";
+}
+
+/* =====================================================================
+   DETALHE DO IMÓVEL
+   ===================================================================== */
+function abrirDetalhe(m, viaLink = false) {
+  const f = E.filtro;
+  E.det = {
+    m,
+    mes: null,
+    ini: E.aba === "temporada" && f.entrada && livreNoPeriodo(m, f.entrada, f.saida) ? f.entrada : null,
+    fim: E.aba === "temporada" && f.saida && livreNoPeriodo(m, f.entrada, f.saida) ? f.saida : null,
+    pessoas: f.pessoas || "",
+    nome: "",
+    modo: modoDoImovel(m),
+  };
+  const base = E.det.ini ? deYmd(E.det.ini) : new Date();
+  E.det.mes = new Date(base.getFullYear(), base.getMonth(), 1);
+
+  renderDetalhe();
+  $("#detalhe").classList.remove("hidden");
+  $("#detalhe-scroll").scrollTop = 0;
+  travar(true);
+  if (!viaLink) history.pushState({ det: m.id }, "", linkImovel(m));
+  else history.replaceState({ det: m.id, direto: true }, "", location.href);
+}
+
+function modoDoImovel(m) {
+  // Se o imóvel tem a modalidade da aba atual, usa ela; senão, a primeira que ele tiver
+  const atual = ABAS.find((a) => a.id === E.aba);
+  if (atual && atual.tem(m)) return atual.id;
+  return ABAS.find((a) => a.tem(m))?.id || "temporada";
+}
+
+function fecharDetalhe() {
+  $("#detalhe").classList.add("hidden");
+  travar(false);
+  E.det = null;
+}
+$("#detalhe-voltar").onclick = () => {
+  if (history.state?.det && !history.state.direto) history.back();
+  else { fecharDetalhe(); history.replaceState(null, "", urlSemImovel()); }
+};
+window.addEventListener("popstate", () => {
+  if (!$("#foto-cheia").classList.contains("hidden")) { $("#foto-cheia").classList.add("hidden"); }
+  if (E.det) fecharDetalhe();
+});
+function urlSemImovel() { const u = new URL(location.href); u.searchParams.delete("m"); return u.toString(); }
+
+$("#detalhe-compartilhar").onclick = async () => {
+  const m = E.det?.m; if (!m) return;
+  const url = linkImovel(m);
+  try {
+    if (navigator.share) await navigator.share({ title: m.titulo, text: `${m.titulo} - ${E.imob.nome}`, url });
+    else { await navigator.clipboard.writeText(url); aviso("Link copiado!"); }
+  } catch (_) {}
+};
+
+function renderDetalhe() {
+  const { m, modo } = E.det;
+  const local = [m.tipo, m.bairro, m.endereco].filter(Boolean).join(" · ");
+  const carac = [
+    ["quartos", "Quartos"], ["suites", "Suítes"], ["banheiros", "Banheiros"],
+    ["vagas", "Vagas"], ["capacidade", "Pessoas"], ["area_m2", "m²"],
+  ].filter(([k]) => m[k] != null && m[k] !== "");
+  const vid = ytId(m.video_url);
+
+  $("#detalhe-scroll").innerHTML = `
+    <div class="det-max">
+      ${galeriaHtml(m)}
+      <div class="det-corpo">
+        <h1>${esc(m.titulo)}</h1>
+        ${local ? `<div class="det-local">${esc(local)}${m.distancia_praia ? ` · 🌊 ${esc(m.distancia_praia)}` : ""}</div>` : ""}
+
+        <div class="det-precos">${precosDetalhe(m)}</div>
+
+        ${carac.length ? `<div class="det-carac">${carac.map(([k, t]) =>
+          `<div><b>${k === "area_m2" ? Number(m[k]).toLocaleString("pt-BR") : esc(m[k])}</b><span>${t}</span></div>`).join("")}</div>` : ""}
+
+        ${m.descricao ? `<div class="secao"><h2>Sobre o imóvel</h2><p class="desc">${esc(m.descricao)}</p></div>` : ""}
+
+        ${m.comodidades?.length ? `<div class="secao"><h2>Comodidades</h2><div class="comod">${m.comodidades.map((c) => `<span>${esc(c)}</span>`).join("")}</div></div>` : ""}
+
+        ${vid ? `<div class="secao"><h2>Vídeo</h2><div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${vid}?rel=0" title="Vídeo do imóvel" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen loading="lazy"></iframe></div></div>` : ""}
+
+        ${modo === "temporada" ? `<div class="secao" id="secao-datas"><h2>Disponibilidade</h2><p class="desc" style="color:var(--muted);font-size:14px;margin-bottom:10px">Toque no dia de entrada e depois no dia de saída.</p><div id="cal"></div><div id="resumo"></div>
+          <div class="form-orc">
+            <label class="campo">Quantas pessoas?<input type="number" id="orc-pessoas" min="1" inputmode="numeric" value="${E.det.pessoas}"></label>
+            <label class="campo">Seu nome<input id="orc-nome" autocomplete="name" placeholder="Opcional" value="${esc(E.det.nome)}"></label>
+          </div>
+        </div>` : ""}
+
+        ${modo !== "temporada" && m.disponivel_a_partir && modo === "alugar" ? `<div class="secao"><h2>Disponibilidade</h2><p class="desc">Disponível a partir de <b>${deYmd(m.disponivel_a_partir).toLocaleDateString("pt-BR")}</b></p></div>` : ""}
+      </div>
+    </div>
+  `;
+  ligarGaleria(m);
+  if (modo === "temporada") {
+    renderCalendario();
+    $("#orc-pessoas").oninput = (ev) => { E.det.pessoas = ev.target.value; };
+    $("#orc-nome").oninput = (ev) => { E.det.nome = ev.target.value; };
+  }
+  renderAcao();
+}
+
+function precosDetalhe(m) {
+  const linhas = [];
+  if (m.temporada) linhas.push(["Diária", m.valor_diaria ? moeda(m.valor_diaria) : "Consulte"]);
+  if (m.mensal) linhas.push(["Aluguel mensal", m.valor_mensal ? `${moeda(m.valor_mensal)} / mês` : "Consulte"]);
+  if (m.anual) linhas.push(["Contrato anual", m.valor_anual ? `${moeda(m.valor_anual)} / mês` : "Consulte"]);
+  if (m.venda) linhas.push(["Venda", m.valor_venda ? moeda(m.valor_venda) : "Sob consulta"]);
+  if (m.prevenda) linhas.push(["Lançamento", m.valor_prevenda ? `a partir de ${moeda(m.valor_prevenda)}` : "Sob consulta"]);
+  return linhas.map(([r, v]) => `<div class="det-preco"><span class="rot">${r}</span><span class="val">${v}</span></div>`).join("");
+}
+
+/* ---------- galeria ---------- */
+function galeriaHtml(m) {
+  if (!m.fotos.length) return `<div class="galeria-vazia">🏠</div>`;
+  return `<div class="galeria">
+    <div class="galeria-trilho" id="galeria-trilho">
+      ${m.fotos.map((u, i) => `<img src="${esc(u)}" alt="Foto ${i + 1}" ${i > 1 ? 'loading="lazy"' : ""} data-i="${i}">`).join("")}
+    </div>
+    ${m.fotos.length > 1 ? `
+      <button class="btn-redondo galeria-seta esq" data-mover="-1" aria-label="Foto anterior">‹</button>
+      <button class="btn-redondo galeria-seta dir" data-mover="1" aria-label="Próxima foto">›</button>
+      <span class="galeria-cont" id="galeria-cont">1 / ${m.fotos.length}</span>` : ""}
+  </div>`;
+}
+
+function ligarGaleria(m) {
+  const tr = $("#galeria-trilho"); if (!tr) return;
+  const atual = () => Math.round(tr.scrollLeft / tr.clientWidth);
+  tr.onscroll = () => { const c = $("#galeria-cont"); if (c) c.textContent = `${atual() + 1} / ${m.fotos.length}`; };
+  document.querySelectorAll("[data-mover]").forEach((b) => b.onclick = () => {
+    tr.scrollTo({ left: (atual() + Number(b.dataset.mover)) * tr.clientWidth, behavior: "smooth" });
+  });
+  tr.onclick = (ev) => { const img = ev.target.closest("img"); if (img) abrirFotoCheia(m, Number(img.dataset.i)); };
+}
+
+function abrirFotoCheia(m, i) {
+  const tr = $("#foto-cheia-trilho");
+  tr.innerHTML = m.fotos.map((u) => `<img src="${esc(u)}" alt="">`).join("");
+  $("#foto-cheia").classList.remove("hidden");
+  requestAnimationFrame(() => { tr.scrollLeft = i * tr.clientWidth; });
+}
+$("#foto-cheia-fechar").onclick = () => $("#foto-cheia").classList.add("hidden");
+
+/* ---------- calendário de disponibilidade ---------- */
+function renderCalendario() {
+  const d = E.det, m = d.m;
+  const oc = E.ocupadas.get(m.id) || new Set();
+  const ano = d.mes.getFullYear(), mes = d.mes.getMonth();
+  const h = hoje();
+  const mesAtual = new Date(); mesAtual.setDate(1);
+  const podeVoltar = d.mes > new Date(mesAtual.getFullYear(), mesAtual.getMonth(), 1);
+  const limite = new Date(); limite.setMonth(limite.getMonth() + 18);
+  const podeAvancar = d.mes < limite;
+
+  let dias = "";
+  const primeiro = new Date(ano, mes, 1).getDay();
+  for (let i = 0; i < primeiro; i++) dias += `<span class="dia vazio"></span>`;
+  const total = new Date(ano, mes + 1, 0).getDate();
+  for (let n = 1; n <= total; n++) {
+    const s = ymd(new Date(ano, mes, n));
+    const cls = ["dia"];
+    if (s < h) cls.push("passado");
+    else if (oc.has(s)) cls.push("ocupado");
+    if (d.ini && (s === d.ini || s === d.fim)) cls.push("sel");
+    else if (d.ini && d.fim && s > d.ini && s < d.fim) cls.push("meio");
+    dias += `<button class="${cls.join(" ")}" data-d="${s}" ${s < h ? "disabled" : ""}>${n}</button>`;
+  }
+  const nomeMes = d.mes.toLocaleDateString("pt-BR", { month: "long" });
+
+  $("#cal").innerHTML = `<div class="cal">
+    <div class="cal-topo">
+      <button data-mes="-1" ${podeVoltar ? "" : "disabled"} aria-label="Mês anterior">‹</button>
+      <h3>${nomeMes[0].toUpperCase() + nomeMes.slice(1)} de ${ano}</h3>
+      <button data-mes="1" ${podeAvancar ? "" : "disabled"} aria-label="Próximo mês">›</button>
+    </div>
+    <div class="cal-semana">${["D", "S", "T", "Q", "Q", "S", "S"].map((x) => `<div>${x}</div>`).join("")}</div>
+    <div class="cal-dias">${dias}</div>
+    <div class="legenda">
+      <span><i style="background:var(--livre-bg);border:1px solid var(--livre)"></i>Livre</span>
+      <span><i style="background:var(--ocupado-bg);border:1px solid var(--ocupado)"></i>Ocupado</span>
+    </div>
+  </div>`;
+
+  $("#cal").onclick = (ev) => {
+    const nav = ev.target.closest("[data-mes]");
+    if (nav && !nav.disabled) { d.mes = new Date(ano, mes + Number(nav.dataset.mes), 1); renderCalendario(); return; }
+    const b = ev.target.closest(".dia[data-d]"); if (!b || b.disabled) return;
+    escolherDia(b.dataset.d);
+  };
+  renderResumo();
+}
+
+function escolherDia(s) {
+  const d = E.det;
+  const oc = E.ocupadas.get(d.m.id) || new Set();
+  // 1º toque (ou recomeço): entrada. Precisa ser um dia livre.
+  if (!d.ini || d.fim || s <= d.ini) {
+    if (oc.has(s)) { aviso("Esse dia já está ocupado. Escolha um dia livre para a entrada."); return; }
+    d.ini = s; d.fim = null;
+  } else {
+    // 2º toque: saída. Todas as noites entre entrada e saída precisam estar livres.
+    if (!livreNoPeriodo(d.m, d.ini, s)) {
+      aviso("Há dias ocupados nesse período. Escolha outra data de saída.");
+      return;
+    }
+    d.fim = s;
+  }
+  renderCalendario();
+  renderAcao();
+}
+
+function renderResumo() {
+  const d = E.det, el = $("#resumo"); if (!el) return;
+  if (!d.ini) { el.innerHTML = ""; return; }
+  if (!d.fim) { el.innerHTML = `<div class="resumo-datas">Entrada: <b>${dataLonga(d.ini)}</b><br>Agora toque no dia de <b>saída</b>.</div>`; return; }
+  const n = noites(d.ini, d.fim);
+  const ref = d.m.valor_diaria ? `<br>Valor de referência: <b>${moeda(d.m.valor_diaria * n)}</b> <span style="color:var(--muted)">(${n} × ${moeda(d.m.valor_diaria)})</span>` : "";
+  el.innerHTML = `<div class="resumo-datas">
+    Entrada: <b>${dataLonga(d.ini)}</b><br>Saída: <b>${dataLonga(d.fim)}</b><br>${plural(n, "diária", "diárias")}${ref}
+    <br><span style="color:var(--muted);font-size:13px">O valor final é confirmado no atendimento.</span>
+  </div>`;
+}
+
+/* ---------- barra de ação (WhatsApp) ---------- */
+function renderAcao() {
+  const d = E.det, m = d.m;
+  const wpp = numeroDestino();
+  const box = $("#detalhe-acao");
+  if (!wpp) {
+    box.innerHTML = `<div class="linha"><div class="info">Para mais informações, fale com ${esc(E.imob.nome)}.</div></div>`;
+    return;
+  }
+  let info, rotulo, pronto = true;
+  if (d.modo === "temporada") {
+    if (d.ini && d.fim) {
+      info = `<b>${dataCurta(d.ini)} → ${dataCurta(d.fim)}</b>${plural(noites(d.ini, d.fim), "diária", "diárias")}`;
+      rotulo = "Pedir orçamento";
+    } else {
+      info = `<b>${m.valor_diaria ? moeda(m.valor_diaria) + " / diária" : "Escolha as datas"}</b>${d.ini ? "Falta o dia de saída" : "Escolha as datas no calendário"}`;
+      rotulo = "Escolher datas"; pronto = false;
+    }
+  } else if (d.modo === "alugar") {
+    const v = m.mensal ? m.valor_mensal : m.valor_anual;
+    info = `<b>${v ? moeda(v) + " / mês" : "Valor sob consulta"}</b>Aluguel`;
+    rotulo = "Tenho interesse";
+  } else {
+    const v = m.venda ? m.valor_venda : m.valor_prevenda;
+    info = `<b>${v ? moeda(v) : "Sob consulta"}</b>${m.venda ? "Venda" : "Lançamento"}`;
+    rotulo = "Tenho interesse";
+  }
+  box.innerHTML = `<div class="linha">
+    <div class="info">${info}</div>
+    <button class="btn ${pronto ? "btn-wpp" : "btn-destaque"}" id="btn-acao">${pronto ? "💬 " : ""}${rotulo}</button>
+  </div>`;
+  $("#btn-acao").onclick = () => {
+    if (!pronto) { $("#secao-datas")?.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    enviarWhatsApp();
+  };
+}
+
+function enviarWhatsApp() {
+  const d = E.det, m = d.m;
+  const linhas = [`Olá! Vi no site da *${E.imob.nome}* e tenho interesse neste imóvel:`, "", `🏠 *${m.titulo}*`];
+  if (m.bairro) linhas.push(`📍 ${m.bairro}`);
+  if (d.modo === "temporada") {
+    const pessoas = parseInt($("#orc-pessoas")?.value || d.pessoas, 10);
+    const nome = ($("#orc-nome")?.value || d.nome).trim();
+    linhas.push(
+      "", "*Pedido de orçamento - Temporada*",
+      `📅 Entrada: ${dataLonga(d.ini)}`,
+      `📅 Saída: ${dataLonga(d.fim)}`,
+      `🌙 ${plural(noites(d.ini, d.fim), "diária", "diárias")}`,
+    );
+    if (pessoas > 0) linhas.push(`👥 ${plural(pessoas, "pessoa", "pessoas")}`);
+    if (nome) linhas.push(`🙋 Nome: ${nome}`);
+  } else if (d.modo === "alugar") {
+    linhas.push("", "Gostaria de saber mais sobre o *aluguel*.");
+  } else {
+    linhas.push("", `Gostaria de saber mais sobre a *${m.venda ? "compra" : "pré-venda"}*.`);
+  }
+  linhas.push("", `🔗 ${linkImovel(m)}`);
+  const url = linkWpp(linhas.join("\n"));
+  if (url) window.open(url, "_blank", "noopener");
+}
+
+/* ---------------- início ---------------- */
+iniciar();
