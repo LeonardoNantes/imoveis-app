@@ -65,6 +65,14 @@ function linkWpp(texto) {
   const n = numeroDestino();
   return n ? `https://wa.me/${n}?text=${encodeURIComponent(texto)}` : null;
 }
+// No celular abre na mesma aba: assim o Android/iPhone passa direto para o app
+// (WhatsApp ou WhatsApp Business) em vez de mostrar a página "Abrir app".
+// No computador abre em outra aba (WhatsApp Web).
+function abrirWhatsApp(url) {
+  if (!url) return;
+  if (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) location.href = url;
+  else window.open(url, "_blank", "noopener");
+}
 function linkImovel(m) {
   const u = new URL(location.href);
   u.search = "";
@@ -207,7 +215,7 @@ function aplicarMarca() {
   }
 
   const wpp = linkWpp(`Olá! Vim pelo site da ${im.nome} e gostaria de mais informações.`);
-  if (wpp) { const a = $("#topo-wpp"); a.href = wpp; a.classList.remove("hidden"); }
+  if (wpp) { const a = $("#topo-wpp"); a.href = wpp; a.dataset.wpp = ""; a.classList.remove("hidden"); }
 
   $("#rodape").innerHTML = `
     ${redesHtml(im)}
@@ -233,7 +241,7 @@ async function renderPessoaHero() {
     </button>`);
   $("#hero-pessoa").onclick = () => {
     const url = linkWpp(`Olá, ${p.nome.split(" ")[0]}! Vim pelo site da ${E.imob.nome} e gostaria de ajuda para encontrar um imóvel.`);
-    if (url) window.open(url, "_blank", "noopener");
+    abrirWhatsApp(url);
   };
 }
 
@@ -295,7 +303,7 @@ function renderExtras() {
   const n = numeroDestino();
   if (n) {
     document.body.insertAdjacentHTML("beforeend", `
-      <a class="wpp-flutuante" id="wpp-flutuante" target="_blank" rel="noopener" aria-label="Falar no WhatsApp"
+      <a class="wpp-flutuante" id="wpp-flutuante" data-wpp target="_blank" rel="noopener" aria-label="Falar no WhatsApp"
          href="${esc(linkWpp(`Olá! Vim pelo site da ${E.imob.nome} e gostaria de mais informações.`))}">
         <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.2-.4.7-1.3a.4.4 0 0 0 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.3.8 3.2.6a2.7 2.7 0 0 0 1.8-1.2 2.2 2.2 0 0 0 .1-1.3c0-.1-.2-.2-.4-.3Z"/></svg>
       </a>`);
@@ -305,7 +313,7 @@ function renderExtras() {
           <h2>É proprietário?</h2>
           <p>Anuncie seu imóvel com a ${esc(E.imob.nome)}. Cuidamos da divulgação e do atendimento aos interessados.</p>
         </div>
-        <a class="btn btn-destaque" target="_blank" rel="noopener"
+        <a class="btn btn-destaque" data-wpp target="_blank" rel="noopener"
            href="${esc(linkWpp(`Olá! Sou proprietário e gostaria de anunciar meu imóvel com a ${E.imob.nome}.`))}">Quero anunciar meu imóvel</a>
       </section>`);
   }
@@ -379,7 +387,7 @@ function abrirFavoritos() {
     const linhas = [`Olá! Vi no site da *${E.imob.nome}* e gostei destes imóveis:`, ""];
     lista.forEach((m, i) => linhas.push(`${i + 1}. *${m.titulo}*${m.codigo ? ` (Cód. ${m.codigo})` : ""}`, `   🔗 ${linkImovel(m)}`));
     linhas.push("", "Pode me passar mais informações?");
-    window.open(linkWpp(linhas.join("\n")), "_blank", "noopener");
+    abrirWhatsApp(linkWpp(linhas.join("\n")));
   });
 }
 
@@ -928,8 +936,14 @@ function enviarWhatsApp() {
   }
   linhas.push("", `🔗 ${linkImovel(m)}`);
   const url = linkWpp(linhas.join("\n"));
-  if (url) window.open(url, "_blank", "noopener");
+  abrirWhatsApp(url);
 }
+
+// Qualquer link de WhatsApp da página segue a mesma regra do abrirWhatsApp
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest("a[data-wpp]"); if (!a) return;
+  ev.preventDefault(); abrirWhatsApp(a.href);
+});
 
 /* ---------------- início ---------------- */
 iniciar();
