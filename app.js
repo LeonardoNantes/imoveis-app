@@ -385,8 +385,8 @@ function abrirFavoritos() {
   };
   $("#enviar-favs")?.addEventListener("click", () => {
     const linhas = [`Olá! Vi no site da *${E.imob.nome}* e gostei destes imóveis:`, ""];
-    lista.forEach((m, i) => linhas.push(`${i + 1}. *${m.titulo}*${m.codigo ? ` (Cód. ${m.codigo})` : ""}`, `   🔗 ${linkImovel(m)}`));
-    linhas.push("", "Pode me passar mais informações?");
+    lista.forEach((m, i) => linhas.push(`${i + 1}. *${m.titulo}*${m.codigo ? ` _(Cód. ${m.codigo})_` : ""}`, `- ${linkImovel(m)}`, ""));
+    linhas.push("Pode me passar mais informações?");
     abrirWhatsApp(linkWpp(linhas.join("\n")));
   });
 }
@@ -914,29 +914,30 @@ function renderAcao() {
   };
 }
 
+// Mensagem sem emojis (alguns celulares mostram "?" no lugar): só *negrito*, _itálico_ e listas com "-"
 function enviarWhatsApp() {
   const d = E.det, m = d.m;
-  const linhas = [`Olá! Vi no site da *${E.imob.nome}* e tenho interesse neste imóvel:`, "", `🏠 *${m.titulo}*${m.codigo ? ` (Cód. ${m.codigo})` : ""}`];
-  if (m.bairro) linhas.push(`📍 ${m.bairro}`);
+  const sub = [m.codigo ? `Cód. ${m.codigo}` : "", m.tipo, m.bairro].filter(Boolean).join(" - ");
+  const linhas = [`Olá! Vi no site da *${E.imob.nome}* e tenho interesse neste imóvel:`, "", `*${m.titulo}*`];
+  if (sub) linhas.push(`_${sub}_`);
   if (d.modo === "temporada") {
     const pessoas = parseInt($("#orc-pessoas")?.value || d.pessoas, 10);
     const nome = ($("#orc-nome")?.value || d.nome).trim();
     linhas.push(
       "", "*Pedido de orçamento - Temporada*",
-      `📅 Entrada: ${dataLonga(d.ini)}`,
-      `📅 Saída: ${dataLonga(d.fim)}`,
-      `🌙 ${plural(noites(d.ini, d.fim), "diária", "diárias")}`,
+      `- Entrada: ${dataLonga(d.ini)}`,
+      `- Saída: ${dataLonga(d.fim)}`,
+      `- Diárias: ${noites(d.ini, d.fim)}`,
     );
-    if (pessoas > 0) linhas.push(`👥 ${plural(pessoas, "pessoa", "pessoas")}`);
-    if (nome) linhas.push(`🙋 Nome: ${nome}`);
+    if (pessoas > 0) linhas.push(`- Pessoas: ${pessoas}`);
+    if (nome) linhas.push(`- Nome: ${nome}`);
   } else if (d.modo === "alugar") {
     linhas.push("", "Gostaria de saber mais sobre o *aluguel*.");
   } else {
     linhas.push("", `Gostaria de saber mais sobre a *${m.venda ? "compra" : "pré-venda"}*.`);
   }
-  linhas.push("", `🔗 ${linkImovel(m)}`);
-  const url = linkWpp(linhas.join("\n"));
-  abrirWhatsApp(url);
+  linhas.push("", "_Link do imóvel:_", linkImovel(m));
+  abrirWhatsApp(linkWpp(linhas.join("\n")));
 }
 
 // Qualquer link de WhatsApp da página segue a mesma regra do abrirWhatsApp
